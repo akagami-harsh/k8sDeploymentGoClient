@@ -24,6 +24,7 @@ func main() {
 		client          *kubernetes.Clientset
 		deploymentLable map[string]string
 		err             error
+		expectedPods    int32
 	)
 
 	ctx := context.Background()
@@ -32,11 +33,11 @@ func main() {
 		fmt.Printf("Error : &s", err)
 		os.Exit(1)
 	}
-	if deploymentLable, err = deploy(ctx, client); err != nil {
+	if deploymentLable, expectedPods, err = deploy(ctx, client); err != nil {
 		fmt.Printf("Error : &s", err)
 		os.Exit(1)
 	}
-	if waitForPod(ctx, client, deploymentLable); err != nil {
+	if waitForPod(ctx, client, deploymentLable, expectedPods); err != nil {
 		fmt.Printf("Error : &s", err)
 		os.Exit(1)
 	}
@@ -59,12 +60,12 @@ func getClient() (*kubernetes.Clientset, error) {
 	return clientset, nil
 }
 
-func deploy(ctx context.Context, client *kubernetes.Clientset) (map[string]string, error) {
+func deploy(ctx context.Context, client *kubernetes.Clientset) (map[string]string, int32, error) {
 	var deployment *v1.Deployment
 
 	appFile, err := ioutil.ReadFile("app.yaml")
 	if err != nil {
-		return nil, fmt.Errorf("readfile error %s", err)
+		return nil, 0, fmt.Errorf("readfile error %s", err)
 	}
 
 	obj, groupVersionKind, err := scheme.Codecs.UniversalDeserializer().Decode(appFile, nil, nil)
@@ -73,29 +74,29 @@ func deploy(ctx context.Context, client *kubernetes.Clientset) (map[string]strin
 	case *v1.Deployment:
 		deployment = obj.(*v1.Deployment)
 	default:
-		return nil, fmt.Errorf("Unrecognized type: %s\n", groupVersionKind)
+		return nil, 0, fmt.Errorf("Unrecognized type: %s\n", groupVersionKind)
 	}
 
 	_, err = client.AppsV1().Deployments("default").Get(ctx, deployment.Name, metav1.GetOptions{})
 	if err != nil && errors.IsNotFound(err) {
 		deploymentResponse, err := client.AppsV1().Deployments("default").Create(ctx, deployment, metav1.CreateOptions{})
 		if err != nil {
-			return nil, fmt.Errorf("deployment error %s", err)
+			return nil, 0, fmt.Errorf("deployment error %s", err)
 		}
-		return deploymentResponse.Spec.Template.Labels, nil
+		return deploymentResponse.Spec.Template.Labels, 0, nil
 
 	} else if err != nil && errors.IsNotFound(err) {
-		return nil, fmt.Errorf("deployment error: %s", err)
+		return nil, 0, fmt.Errorf("deployment error: %s", err)
 	}
 
 	deploymentResponse, err := client.AppsV1().Deployments("default").Update(ctx, deployment, metav1.UpdateOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("deployment error %s", err)
+		return nil, 0, fmt.Errorf("deployment error %s", err)
 	}
-	return deploymentResponse.Spec.Template.Labels, nil
+	return deploymentResponse.Spec.Template.Labels, *deploymentResponse.Spec.Replicas, nil
 }
 
-func waitForPod(ctx context.Context, client *kubernetes.Clientset, deploymentLabels map[string]string) error {
+func waitForPod(ctx context.Context, client *kubernetes.Clientset, deploymentLabels map[string]string, expectedPods int32) error {
 
 	for {
 		validateLables, err := labels.ValidatedSelectorFromSet(deploymentLabels)
@@ -115,10 +116,13 @@ func waitForPod(ctx context.Context, client *kubernetes.Clientset, deploymentLab
 			}
 
 		}
-		if podsRunning > 0 && podsRunning == len(podList.Items) {
+
+		fmt.Printf("waiting for pods to become ready (running %d/%d)\n", podsRunning, len(podList.Items))
+
+		if podsRunning > 0 && podsRunning == len(podList.Items) && podsRunning == int(expectedPods) {
 			break
 		}
-		fmt.Printf("waiting for pods to become ready (running %d/%d)\n", podsRunning, len(podList.Items))
+
 		time.Sleep(5 * time.Second)
 
 	}
