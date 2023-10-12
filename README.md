@@ -1,4 +1,7 @@
 # k8sDeploymentGoClient
+## Description
+- This is a kubernets deployment client
+- it can deploy kubernetes yaml file
 
-## requirements 
-1. golang 1.19
+### requirements 
+- golang 1.19
